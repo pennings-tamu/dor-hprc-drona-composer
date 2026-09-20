@@ -4,7 +4,7 @@ sidebar_position: 2
 
 # Form Components
 
-Documentation for all form components in the Drona Workflow Engine system. Components are used in JSON schema files by specifying the appropriate `type` field.
+Documentation for all form components in the Drona Composer system. Components are used in JSON schema files by specifying the appropriate `type` field.
 
 ## Common Properties
 
@@ -69,10 +69,161 @@ A dynamic search-based dropdown component that fetches options as you type. Uses
 "placeholder": "Search for an institution...",
 "help": "Type at least 2 characters to search for institutions"
 }
-/
 ```
 
 *Source: `src/schemaRendering/schemaElements/AutocompleteSelect.js`*
+
+---
+
+## Chart
+
+A declarative, self-contained live chart backed by Recharts. Polls a retriever script on an interval (like `staticText`) and renders line/bar/area/pie charts from whatever JSON it returns — no JSX or hand-written JS required, every aspect of the chart (type, axes, series, colors) is controlled by plain JSON properties. The retriever may emit a JSON array of samples (replaces the rolling window each poll — the recommended `tail -n <N>` pattern) or a single JSON sample object (appended to an in-memory buffer capped at `maxDataPoints`). Set `series: "auto"` to derive series from whatever keys show up in each sample when the metric set isn't known until runtime (e.g. GPU count varies per job), or pass an explicit array when metric names are fixed and known ahead of time. See the "Live Charts" guide under Environment Development > Advanced Features for the full retriever contract, data-format examples, and suggested retriever scripts. A single poll can also be split across multiple side-by-side panels instead of one combined chart — see `panels` (explicit, for grouping semantically different metrics like GPU % vs. memory GB, each with its own y-axis) and `seriesPerPanel` (automatic, for capping how many lines land in one panel when the series count isn't known ahead of time, e.g. `series: "auto"` with a variable GPU count). Both still poll the retriever exactly once per interval regardless of panel count. If both are given, `panels` wins and `seriesPerPanel` is ignored.
+
+### Properties
+- `name - Component name` (string) - 
+- `label` (string, optional) - Display label
+- `labelOnTop=false` (boolean, optional) - Label above vs. beside the chart
+- `help` (string, optional) - Help text below the chart
+- `chartType="line"` ("line"|"bar"|"area"|"pie", optional) - Chart type. Applies to the single pane, or uniformly to every `seriesPerPanel`-generated panel; ignored for `panels` entries that set their own `chartType`.
+- `retriever - Path to the retriever script` (string) - 
+- `retrieverParams` (Object, optional) - Params passed to the script, `$fieldName` values are substituted from form state
+- `refreshInterval` (number, optional) - Poll interval in seconds. Omit/0 to fetch once on mount only.
+- `maxDataPoints=120` (number, optional) - Rolling window cap (client-side safety net, applied regardless of what the retriever returns)
+- `series="auto"` (string|Array, optional) - "auto" to derive series from sample keys, or an array of `{key, label, color}` objects for fixed, known metrics
+- `seriesLabelMap` (Object, optional) - `{key: label}` overrides for auto-derived series labels
+- `colors` (string[], optional) - Override the default 8-color sequence used for auto series
+- `xAxis` (Object, optional) - `{key="timestamp", label, format, unit}`. `format`: "time"|"date"|"datetime" applies a built-in formatter; `unit`: "s"|"ms" (default "s") for timestamp values.
+- `yAxis` (Object, optional) - `{label, min, max}`
+- `stacked=false` (boolean, optional) - Stack series (bar/area only)
+- `height=300` (number, optional) - Chart height in pixels. Applies per-panel when `panels`/`seriesPerPanel` is used, unless a `panels` entry overrides it.
+- `showLegend=true` (boolean, optional) - Show legend when there are 2+ series in a given pane
+- `showGrid=true` (boolean, optional) - Show gridlines
+- `showTable=false` (boolean, optional) - Show a "view as table" toggle below the chart (accessibility fallback). With `panels`/`seriesPerPanel`, one combined table covers every series across all panels.
+- `emptyMessage="No data yet"` (string, optional) - Message shown before the first sample arrives
+- `panels` (Array<Object>, optional) - Explicit, manual panel split from one shared poll: `{title, series, seriesLabelMap, colors, chartType, yAxis, stacked, showLegend, showGrid, height}` per panel. `series` is required per panel (usually an explicit `{key,label,color}` array, since the point is hand-grouping known keys by meaning). Omitted per-panel options fall back to the top-level prop of the same name. Takes precedence over `seriesPerPanel` if both are set.
+- `seriesPerPanel` (number, optional) - Automatic split: chunks the series derived from the top-level `series` prop (auto or explicit) into groups of this size, one panel per group, in first-seen order. Panel count adjusts as new keys appear in the data. Ignored if `panels` is set.
+
+### Examples
+#### Example 1
+```json
+// Dynamic series line chart — GPU utilization, GPU count unknown ahead of time
+{
+"type": "chart",
+"name": "gpuUtilization",
+"label": "GPU Utilization",
+"chartType": "line",
+"retriever": "retrievers/gpu_utilization_retriever.sh",
+"retrieverParams": { "jobId": "$jobId" },
+"refreshInterval": 10,
+"maxDataPoints": 120,
+"xAxis": { "key": "timestamp", "label": "Time", "format": "time" },
+"yAxis": { "label": "Utilization (%)", "min": 0, "max": 100 },
+"series": "auto",
+"help": "Live GPU utilization — one line per GPU reported"
+}
+```
+
+#### Example 2
+```json
+// Explicit series — fixed, known metric names
+{
+"type": "chart",
+"name": "trainingMetrics",
+"label": "Training Progress",
+"chartType": "line",
+"retriever": "retrievers/training_log_retriever.sh",
+"retrieverParams": { "jobId": "$jobId" },
+"refreshInterval": 15,
+"maxDataPoints": 200,
+"xAxis": { "key": "epoch", "label": "Epoch" },
+"series": [
+{ "key": "loss", "label": "Loss", "color": "#e34948" },
+{ "key": "accuracy", "label": "Accuracy", "color": "#1baf7a" }
+]
+}
+```
+
+#### Example 3
+```json
+// Stacked bar chart
+{
+"type": "chart",
+"name": "diskIO",
+"label": "Disk I/O",
+"chartType": "bar",
+"stacked": true,
+"retriever": "retrievers/disk_io_retriever.sh",
+"retrieverParams": { "jobId": "$jobId" },
+"refreshInterval": 10,
+"xAxis": { "key": "timestamp", "label": "Time", "format": "time" },
+"series": [
+{ "key": "read", "label": "Read (MB/s)" },
+{ "key": "write", "label": "Write (MB/s)" }
+]
+}
+```
+
+#### Example 4
+```json
+// Pie chart snapshot — dynamic series (per-rank memory, rank count unknown)
+{
+"type": "chart",
+"name": "memoryByRank",
+"label": "Memory Usage by Rank",
+"chartType": "pie",
+"retriever": "retrievers/memory_by_rank_retriever.sh",
+"retrieverParams": { "jobId": "$jobId" },
+"refreshInterval": 10,
+"series": "auto",
+"help": "Current memory usage per MPI rank"
+}
+```
+
+#### Example 5
+```json
+// Explicit panels — two semantically different metric families, one shared poll,
+// each with its own y-axis (count-based splitting can't do this: it groups by
+// discovery order, not by what a key means)
+{
+"type": "chart",
+"name": "gpuAndMemory",
+"label": "GPU & Memory",
+"retriever": "retrievers/gpu_and_memory_retriever.sh",
+"refreshInterval": 10,
+"xAxis": { "key": "timestamp", "label": "Time", "format": "time" },
+"panels": [
+{
+"title": "GPU Utilization",
+"series": [{ "key": "gpu0" }, { "key": "gpu1" }],
+"yAxis": { "label": "Utilization (%)", "min": 0, "max": 100 }
+},
+{
+"title": "Memory Usage",
+"chartType": "area",
+"series": [{ "key": "mem0" }, { "key": "mem1" }],
+"yAxis": { "label": "Memory (GB)", "min": 0, "max": 80 }
+}
+]
+}
+```
+
+#### Example 6
+```json
+// seriesPerPanel — series count unknown ahead of time (auto), capped at 2 lines per panel
+{
+"type": "chart",
+"name": "gpuUtilizationSplit",
+"label": "GPU Utilization (split)",
+"retriever": "retrievers/gpu_utilization_retriever.sh",
+"refreshInterval": 10,
+"xAxis": { "key": "timestamp", "label": "Time", "format": "time" },
+"yAxis": { "label": "Utilization (%)", "min": 0, "max": 100 },
+"series": "auto",
+"seriesPerPanel": 2
+}
+```
+
+*Source: `src/schemaRendering/schemaElements/Chart.js`*
 
 ---
 
@@ -96,7 +247,6 @@ A checkbox input component that returns a specified value when checked and an em
 "value": "Yes",
 "help": "Toggle input that returns a value when checked"
 }
-/
 ```
 
 *Source: `src/schemaRendering/schemaElements/Checkbox.js`*
@@ -129,7 +279,6 @@ A checkbox group component that allows users to select multiple options from a l
 "value": ["analytics", "reporting"],
 "help": "Select one or more options"
 }
-/
 ```
 
 *Source: `src/schemaRendering/schemaElements/CheckboxGroup.js`*
@@ -143,6 +292,7 @@ A collapsible container component that organizes form fields in a horizontal row
 ### Properties
 - `elements - Object of field configuration objects to be rendered in the container` (Object) - 
 - `title="Collapsible Row Container"` (string, optional) - Title displayed in the container header
+- `default_state="expanded"` (('collapsed'|'expanded'), optional) - Initial visibility state
 
 ### Example
 ```json
@@ -171,10 +321,48 @@ A collapsible container component that organizes form fields in a horizontal row
 }
 }
 }
-/
 ```
 
 *Source: `src/schemaRendering/schemaElements/CollapsibleContainer.js`*
+
+---
+
+## Container
+
+A layout component that organizes form fields in a vertical row. It wraps multiple form elements in a responsive grid layout, with each child element rendered by the FieldRenderer component in a row format.
+
+### Properties
+- `elements - Array of field configuration objects to be rendered in the row` (Array) - 
+
+### Example
+```json
+// Row with multiple text fields
+{
+"type": "container",
+"elements": {
+"element1": {
+"type": "text",
+"name": "element1",
+"label": "Container1",
+"placeholder": "Enter text"
+},
+"element2": {
+"type": "text",
+"name": "element1",
+"label": "Container1",
+"placeholder": "Enter text"
+},
+"element3": {
+"type": "text",
+"name": "element1",
+"label": "Container1",
+"placeholder": "Enter text"
+}
+}
+}
+```
+
+*Source: `src/schemaRendering/schemaElements/Container.js`*
 
 ---
 
@@ -217,7 +405,6 @@ A visual drag-and-drop form builder component that allows users to construct for
 "allowEdit": true,
 "help": "Drag elements from the palette to build your form"
 }
-/
 ```
 
 *Source: `src/schemaRendering/schemaElements/DragDropContainer.js`*
@@ -262,7 +449,6 @@ A checkbox group that dynamically loads its options from a retriever script. All
 "retrieverParams": { "role": "$userRole", "environment": "production" },
 "help": "Permissions update based on selected role"
 }
-/
 ```
 
 *Source: `src/schemaRendering/schemaElements/DynamicCheckboxGroup.js`*
@@ -271,12 +457,12 @@ A checkbox group that dynamically loads its options from a retriever script. All
 
 ## DynamicRadioGroup
 
-A radio button group that dynamically loads its options from a retriever script. Allows single selection and automatically refreshes options when dependent form values change. Warns when the previously selected option becomes unavailable after options refresh.
+A radio button group that dynamically loads its options from a retriever script. Allows single selection and automatically refreshes options when dependent form values change. Warns when the previously selected option becomes unavailable.
 
 ### Properties
 - `name - Input field name, used for form submission` (string) - 
 - `label` (string, optional) - Display label for the field
-- `retriever - Path to the script that retrieves radio button options` (string) - 
+- `retriever - Path to the script that retrieves radio options` (string) - 
 - `retrieverParams` (Object, optional) - Parameters passed to the retriever script, values with $ prefix are replaced with form values
 - `value` (string, optional) - Default/initial selected value
 - `options` (Array, optional) - Initial options array, overridden by retriever results
@@ -288,11 +474,11 @@ A radio button group that dynamically loads its options from a retriever script.
 // Basic dynamic radio group
 {
 "type": "dynamicRadioGroup",
-"name": "cluster",
-"label": "Available Clusters",
-"retriever": "retrievers/clusters_list.sh",
-"value": "cluster1",
-"help": "Select a cluster (options loaded dynamically)"
+"name": "selectedOption",
+"label": "Choose One",
+"retriever": "retrievers/options_list.sh",
+"value": "option1",
+"help": "Select one option (options loaded dynamically)"
 }
 ```
 
@@ -301,13 +487,12 @@ A radio button group that dynamically loads its options from a retriever script.
 // Dynamic radio group with parameters from form values
 {
 "type": "dynamicRadioGroup",
-"name": "nodeType",
-"label": "Node Type",
-"retriever": "retrievers/node_types_by_cluster.sh",
-"retrieverParams": { "cluster": "$cluster", "availability": "high" },
-"help": "Available node types update based on selected cluster"
+"name": "deployment",
+"label": "Deployment Target",
+"retriever": "retrievers/deployments_by_env.sh",
+"retrieverParams": { "environment": "$selectedEnv" },
+"help": "Deployment targets update based on selected environment"
 }
-/
 ```
 
 *Source: `src/schemaRendering/schemaElements/DynamicRadioGroup.js`*
@@ -352,10 +537,63 @@ A dropdown select component that dynamically loads its options from a retriever 
 "retrieverParams": { "region": "$selectedRegion", "type": "production" },
 "help": "Servers will update based on selected region"
 }
-/
 ```
 
 *Source: `src/schemaRendering/schemaElements/DynamicSelect.js`*
+
+---
+
+## DynamicViewer
+
+A sandboxed iframe-based viewer component that can load external CDN libraries and execute custom initialization code. Supports dynamic data fetching via retriever scripts.
+
+### Properties
+- `name - Component name for form submission` (string) - 
+- `retriever` (string, optional) - Path to retriever script for dynamic data
+- `retrieverPath` (string, optional) - Alias for retriever
+- `retrieverParams` (Object, optional) - Parameters with $fieldName references for dynamic values
+- `value - Viewer configuration object` (Object) - 
+- `value.title` (string, optional) - Title displayed in card header
+- `value.description` (string, optional) - Description shown under title
+- `value.cdnLibraries` (string|string[], optional) - CDN URLs to load (must be from approved sources)
+- `value.initCode` (string, optional) - JavaScript code to execute in iframe, or a path to a .js file (e.g. "viewers/myViewer.js") whose content will be fetched and used
+- `value.data` (Object, optional) - Static data passed to initCode (overridden by retriever)
+- `value.height="600px"` (string, optional) - Iframe height
+- `value.footer` (string, optional) - Footer text
+
+### Examples
+#### Example 1
+```json
+// Static data viewer
+{
+"type": "dynamicViewer",
+"name": "proteinViewer",
+"value": {
+"title": "Protein Viewer",
+"cdnLibraries": ["https://3dmol.csb.pitt.edu/build/3Dmol-min.js"],
+"initCode": "// Use data variable",
+"data": { "pdbId": "1CRN" }
+}
+}
+```
+
+#### Example 2
+```json
+// Dynamic data viewer with retriever
+{
+"type": "dynamicViewer",
+"name": "proteinViewer",
+"retriever": "retrievers/fetch_protein.sh",
+"retrieverParams": { "proteinId": "$selectedProtein" },
+"value": {
+"title": "Protein Viewer",
+"cdnLibraries": ["https://3dmol.csb.pitt.edu/build/3Dmol-min.js"],
+"initCode": "// data variable contains fetched result"
+}
+}
+```
+
+*Source: `src/schemaRendering/schemaElements/DynamicViewer.js`*
 
 ---
 
@@ -392,7 +630,6 @@ Executes dynamic scripts without any visual output. Takes no space and displays 
 "name": "staticAction",
 "value": "some_static_value"
 }
-/
 ```
 
 *Source: `src/schemaRendering/schemaElements/Hidden.js`*
@@ -441,7 +678,6 @@ A composite form component that combines job name input and location picker in a
 "showLocation": true,
 "help": "Job name is fixed, but you can change the location"
 }
-/
 ```
 
 *Source: `src/schemaRendering/schemaElements/JobNameLocation.js`*
@@ -459,6 +695,7 @@ A module selection component that allows users to search and select software mod
 - `toolchains - Array of toolchain options, each with value and label properties` (Array) - 
 - `toolchainName="toolchain"` (string, optional) - Name for the toolchain select input
 - `help` (string, optional) - Help text displayed below the input
+- `module_db_root` (string, optional) - Base directory where module database is located
 
 ### Example
 ```json
@@ -476,7 +713,6 @@ A module selection component that allows users to search and select software mod
 "toolchainName": "toolchain",
 "help": "Search and select software modules for your environment"
 }
-/
 ```
 
 *Source: `src/schemaRendering/schemaElements/Module.js`*
@@ -511,7 +747,6 @@ A numeric input field component for collecting numerical values. Supports minimu
 "placeholder": "Enter a number",
 "help": "Numeric input with min/max constraints"
 }
-/
 ```
 
 *Source: `src/schemaRendering/schemaElements/Number.js`*
@@ -554,7 +789,6 @@ A file and directory picker component that allows users to browse and select fil
 "useHPCDefaultPaths": true,
 "help": "Select a file or directory location"
 }
-/
 ```
 
 *Source: `src/schemaRendering/schemaElements/Picker.js`*
@@ -570,6 +804,7 @@ A radio button group component that allows users to select a single option from 
 - `label` (string, optional) - Display label for the field
 - `options - Array of option objects, each with value and label properties` (Array) - 
 - `value` (string, optional) - Default/initial selected value
+- `style` (string, optional) - Render variant; set to "button" for button-style radio options
 - `help` (string, optional) - Help text displayed below the input
 
 ### Example
@@ -579,6 +814,7 @@ A radio button group component that allows users to select a single option from 
 "type": "radioGroup",
 "name": "priority",
 "label": "RadioGroup",
+"style": "button",
 "options": [
 { "value": "low", "label": "Low" },
 { "value": "medium", "label": "Medium" },
@@ -587,7 +823,6 @@ A radio button group component that allows users to select a single option from 
 "value": "medium",
 "help": "Select one option from multiple choices"
 }
-/
 ```
 
 *Source: `src/schemaRendering/schemaElements/RadioGroup.js`*
@@ -627,7 +862,6 @@ A layout component that organizes form fields in a horizontal row. It wraps mult
 }
 }
 }
-/
 ```
 
 *Source: `src/schemaRendering/schemaElements/RowContainer.js`*
@@ -661,7 +895,6 @@ A dropdown select component based on react-select that provides a customizable s
 "value": { "value": "option1", "label": "Option 1" },
 "help": "Select one option from the dropdown"
 }
-/
 ```
 
 *Source: `src/schemaRendering/schemaElements/Select.js`*
@@ -726,7 +959,6 @@ Displays static or dynamically fetched text content. Can show plain text or HTML
 "allowHtml": true,
 "refreshInterval": 30
 }
-/
 ```
 
 *Source: `src/schemaRendering/schemaElements/StaticText.js`*
@@ -755,7 +987,6 @@ A standard text input field component for collecting single-line text input. Pro
 "placeholder": "Enter your text here",
 "help": "Standard single-line text input field"
 }
-/
 ```
 
 *Source: `src/schemaRendering/schemaElements/Text.js`*
@@ -786,7 +1017,6 @@ A multi-line text input field component for collecting longer text content. Prov
 "placeholder": "Enter multi-line text here",
 "help": "Multi-line text input for longer content"
 }
-/
 ```
 
 *Source: `src/schemaRendering/schemaElements/TextArea.js`*
@@ -813,7 +1043,6 @@ A time duration input component that allows users to specify time periods using 
 "value": "36:30",
 "help": "Specify a time duration in days, hours, and minutes"
 }
-/
 ```
 
 *Source: `src/schemaRendering/schemaElements/Time.js`*
@@ -846,7 +1075,6 @@ A compound input component that combines a numeric value with a unit selector. U
 ],
 "help": "Select a numeric value with units"
 }
-/
 ```
 
 *Source: `src/schemaRendering/schemaElements/Unit.js`*
@@ -876,7 +1104,6 @@ A file and directory uploader component that allows users to select and upload i
 "acceptedFileTypes": ["text/*", "application/json", ".csv"],
 "help": "Upload files or directories with support for multiple file selection"
 }
-/
 ```
 
 *Source: `src/schemaRendering/schemaElements/Uploader.js`*
